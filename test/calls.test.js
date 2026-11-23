@@ -534,3 +534,837 @@ test("End-to-end Express route POST /api/calls/accept responds through app pipel
   assert.equal(response.body.data.caller.participantName, "caller-e2e-1");
   assert.equal(response.body.data.receiver.participantName, "receiver-e2e-2");
 });
+
+// -------------------------------------------------------------
+// Reject Call API Tests (POST /api/calls/reject)
+// -------------------------------------------------------------
+
+test("Reject Call fails with 401 if request has no authenticated user", async () => {
+  const req = { user: null, body: { callId: "some-call-id" } };
+  const res = createMockRes();
+
+  await callController.reject(req, res);
+
+  assert.equal(res.statusCode, 401);
+  assert.equal(res.body.success, false);
+});
+
+test("Reject Call fails with 400 when callId is missing or empty", async () => {
+  for (const invalidCallId of [undefined, null, "", "   "]) {
+    const req = { user: { id: "receiver-uuid" }, body: { callId: invalidCallId } };
+    const res = createMockRes();
+
+    await callController.reject(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.success, false);
+    assert.equal(res.body.message, "callId is required");
+  }
+});
+
+test("Reject Call fails with 404 when call does not exist", async (t) => {
+  t.mock.method(Call, "findById", async () => null);
+
+  const req = { user: { id: "receiver-uuid" }, body: { callId: "nonexistent-call-id" } };
+  const res = createMockRes();
+
+  await callController.reject(req, res);
+
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Call not found");
+});
+
+test("Reject Call fails with 403 when caller tries to reject their own call", async (t) => {
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-1",
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    status: "ringing",
+  }));
+
+  const req = { user: { id: "user-alice" }, body: { callId: "call-1" } };
+  const res = createMockRes();
+
+  await callController.reject(req, res);
+
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Caller cannot reject their own call");
+});
+
+test("Reject Call fails with 403 when unrelated user tries to reject call", async (t) => {
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-1",
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    status: "ringing",
+  }));
+
+  const req = { user: { id: "user-eve" }, body: { callId: "call-1" } };
+  const res = createMockRes();
+
+  await callController.reject(req, res);
+
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Only the intended receiver can reject this call");
+});
+
+test("Reject Call fails with 400 when call is not in ringing status", async (t) => {
+  for (const invalidStatus of ["accepted", "rejected", "cancelled", "ended", "missed"]) {
+    t.mock.method(Call, "findById", async () => ({
+      callId: "call-1",
+      callerId: "user-alice",
+      receiverId: "user-bob",
+      status: invalidStatus,
+    }));
+
+    const req = { user: { id: "user-bob" }, body: { callId: "call-1" } };
+    const res = createMockRes();
+
+    await callController.reject(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.success, false);
+    assert.match(res.body.message, new RegExp(`already ${invalidStatus}`));
+  }
+});
+
+test("Reject Call fails with 409 when concurrent action updates call", async (t) => {
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-1",
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    status: "ringing",
+  }));
+  t.mock.method(Call, "reject", async () => null);
+
+  const req = { user: { id: "user-bob" }, body: { callId: "call-1" } };
+  const res = createMockRes();
+
+  await callController.reject(req, res);
+
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Call is no longer available to reject");
+});
+
+test("Reject Call succeeds with 200, updates status to rejected, and records endedAt", async (t) => {
+  const initialCall = {
+    callId: "call-reject-1",
+    callerId: "caller-user-id",
+    receiverId: "receiver-user-id",
+    status: "ringing",
+  };
+
+  t.mock.method(Call, "findById", async () => initialCall);
+
+  const endedAtTimestamp = new Date().toISOString();
+  let rejectCalledWith = null;
+  t.mock.method(Call, "reject", async (params) => {
+    rejectCalledWith = params;
+    return {
+      ...initialCall,
+      status: "rejected",
+      endedAt: endedAtTimestamp,
+    };
+  });
+
+  const req = { user: { id: "receiver-user-id" }, body: { callId: "call-reject-1" } };
+  const res = createMockRes();
+
+  await callController.reject(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.message, "Call rejected successfully");
+  assert.equal(res.body.data.callId, "call-reject-1");
+  assert.equal(res.body.data.status, "rejected");
+  assert.equal(res.body.data.endedAt, endedAtTimestamp);
+  assert.deepEqual(rejectCalledWith, { id: "call-reject-1", receiverId: "receiver-user-id" });
+});
+
+test("End-to-end Express route POST /api/calls/reject responds through app pipeline", async (t) => {
+  const receiverUser = { id: "receiver-rej-user", name: "Receiver Rej" };
+
+  t.mock.method(User, "findById", async (id) => (id === "receiver-rej-user" ? receiverUser : null));
+
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-rej-101",
+    callerId: "caller-rej-user",
+    receiverId: "receiver-rej-user",
+    status: "ringing",
+  }));
+
+  const endedAt = new Date().toISOString();
+  t.mock.method(Call, "reject", async () => ({
+    callId: "call-rej-101",
+    callerId: "caller-rej-user",
+    receiverId: "receiver-rej-user",
+    status: "rejected",
+    endedAt,
+  }));
+
+  const response = await dispatchApp({
+    method: "POST",
+    url: "/api/calls/reject",
+    headers: {
+      authorization: "Bearer receiver-rej-user",
+    },
+    body: {
+      callId: "call-rej-101",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.message, "Call rejected successfully");
+  assert.equal(response.body.data.callId, "call-rej-101");
+  assert.equal(response.body.data.status, "rejected");
+  assert.equal(response.body.data.endedAt, endedAt);
+});
+
+// -------------------------------------------------------------
+// End Call API Tests (POST /api/calls/end)
+// -------------------------------------------------------------
+
+test("End Call fails with 401 if request has no authenticated user", async () => {
+  const req = { user: null, body: { callId: "some-call-id" } };
+  const res = createMockRes();
+
+  await callController.endCall(req, res);
+
+  assert.equal(res.statusCode, 401);
+  assert.equal(res.body.success, false);
+});
+
+test("End Call fails with 400 when callId is missing or empty", async () => {
+  for (const invalidCallId of [undefined, null, "", "   "]) {
+    const req = { user: { id: "user-123" }, body: { callId: invalidCallId } };
+    const res = createMockRes();
+
+    await callController.endCall(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.success, false);
+    assert.equal(res.body.message, "callId is required");
+  }
+});
+
+test("End Call fails with 404 when call does not exist", async (t) => {
+  t.mock.method(Call, "findById", async () => null);
+
+  const req = { user: { id: "user-123" }, body: { callId: "nonexistent-call-id" } };
+  const res = createMockRes();
+
+  await callController.endCall(req, res);
+
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Call not found");
+});
+
+test("End Call fails with 403 when user is neither caller nor receiver", async (t) => {
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-1",
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    status: "accepted",
+  }));
+
+  const req = { user: { id: "user-eve" }, body: { callId: "call-1" } };
+  const res = createMockRes();
+
+  await callController.endCall(req, res);
+
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Only call participants can end this call");
+});
+
+test("End Call fails with 400 when call is not in accepted status", async (t) => {
+  for (const invalidStatus of ["ringing", "rejected", "cancelled", "ended", "missed"]) {
+    t.mock.method(Call, "findById", async () => ({
+      callId: "call-1",
+      callerId: "user-alice",
+      receiverId: "user-bob",
+      status: invalidStatus,
+    }));
+
+    const req = { user: { id: "user-alice" }, body: { callId: "call-1" } };
+    const res = createMockRes();
+
+    await callController.endCall(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.success, false);
+    assert.match(res.body.message, new RegExp(`cannot be ended because it is ${invalidStatus}`));
+  }
+});
+
+test("End Call fails with 409 when concurrent end occurs", async (t) => {
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-1",
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    status: "accepted",
+  }));
+  t.mock.method(Call, "end", async () => null);
+
+  const req = { user: { id: "user-alice" }, body: { callId: "call-1" } };
+  const res = createMockRes();
+
+  await callController.endCall(req, res);
+
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Call state was updated by another request");
+});
+
+test("End Call succeeds with 200 when caller ends call, calculating duration", async (t) => {
+  const startedAt = new Date(Date.now() - 65 * 1000).toISOString();
+  const endedAt = new Date().toISOString();
+
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-end-1",
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    roomName: "call-call-end-1",
+    status: "accepted",
+    startedAt,
+  }));
+
+  t.mock.method(Call, "end", async ({ id, userId }) => ({
+    callId: id,
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    roomName: "call-call-end-1",
+    status: "ended",
+    createdAt: new Date(Date.now() - 70 * 1000).toISOString(),
+    startedAt,
+    endedAt,
+    duration: 65,
+  }));
+
+  const req = { user: { id: "user-alice" }, body: { callId: "call-end-1" } };
+  const res = createMockRes();
+
+  await callController.endCall(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.message, "Call ended successfully");
+  assert.equal(res.body.data.callId, "call-end-1");
+  assert.equal(res.body.data.status, "ended");
+  assert.equal(res.body.data.startedAt, startedAt);
+  assert.equal(res.body.data.endedAt, endedAt);
+  assert.equal(res.body.data.duration, 65);
+});
+
+test("End Call succeeds with 200 when receiver ends call", async (t) => {
+  const startedAt = new Date(Date.now() - 120 * 1000).toISOString();
+  const endedAt = new Date().toISOString();
+
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-end-2",
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    roomName: "call-call-end-2",
+    status: "accepted",
+    startedAt,
+  }));
+
+  t.mock.method(Call, "end", async () => ({
+    callId: "call-end-2",
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    roomName: "call-call-end-2",
+    status: "ended",
+    createdAt: new Date(Date.now() - 130 * 1000).toISOString(),
+    startedAt,
+    endedAt,
+    duration: 120,
+  }));
+
+  const req = { user: { id: "user-bob" }, body: { callId: "call-end-2" } };
+  const res = createMockRes();
+
+  await callController.endCall(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.data.status, "ended");
+  assert.equal(res.body.data.duration, 120);
+});
+
+test("End-to-end Express route POST /api/calls/end responds through app pipeline", async (t) => {
+  const callerUser = { id: "caller-end-user", name: "Caller End" };
+
+  t.mock.method(User, "findById", async (id) => (id === "caller-end-user" ? callerUser : null));
+
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-e2e-end",
+    callerId: "caller-end-user",
+    receiverId: "receiver-end-user",
+    status: "accepted",
+  }));
+
+  const startedAt = new Date(Date.now() - 30 * 1000).toISOString();
+  const endedAt = new Date().toISOString();
+
+  t.mock.method(Call, "end", async () => ({
+    callId: "call-e2e-end",
+    callerId: "caller-end-user",
+    receiverId: "receiver-end-user",
+    roomName: "call-e2e-room",
+    status: "ended",
+    createdAt: new Date().toISOString(),
+    startedAt,
+    endedAt,
+    duration: 30,
+  }));
+
+  const response = await dispatchApp({
+    method: "POST",
+    url: "/api/calls/end",
+    headers: {
+      authorization: "Bearer caller-end-user",
+    },
+    body: {
+      callId: "call-e2e-end",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.message, "Call ended successfully");
+  assert.equal(response.body.data.status, "ended");
+  assert.equal(response.body.data.duration, 30);
+});
+
+// -------------------------------------------------------------
+// Get Call Details API Tests (GET /api/calls/:callId)
+// -------------------------------------------------------------
+
+test("Get Call Details fails with 401 if request has no authenticated user", async () => {
+  const req = { user: null, params: { callId: "some-call-id" } };
+  const res = createMockRes();
+
+  await callController.getDetails(req, res);
+
+  assert.equal(res.statusCode, 401);
+  assert.equal(res.body.success, false);
+});
+
+test("Get Call Details fails with 404 when call does not exist", async (t) => {
+  t.mock.method(Call, "findById", async () => null);
+
+  const req = { user: { id: "user-123" }, params: { callId: "nonexistent-call-id" } };
+  const res = createMockRes();
+
+  await callController.getDetails(req, res);
+
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Call not found");
+});
+
+test("Get Call Details fails with 403 when user is neither caller nor receiver", async (t) => {
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-details-1",
+    callerId: "caller-alice",
+    receiverId: "receiver-bob",
+    status: "accepted",
+  }));
+
+  const req = { user: { id: "unrelated-eve" }, params: { callId: "call-details-1" } };
+  const res = createMockRes();
+
+  await callController.getDetails(req, res);
+
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Access denied: You are not a participant in this call");
+});
+
+test("Get Call Details succeeds for caller and receiver, returning required fields without secrets", async (t) => {
+  const callRecord = {
+    callId: "call-details-2",
+    callerId: "caller-alice",
+    receiverId: "receiver-bob",
+    roomName: "call-room-details",
+    status: "ended",
+    createdAt: "2026-11-20T10:00:00.000Z",
+    startedAt: "2026-11-20T10:00:05.000Z",
+    endedAt: "2026-11-20T10:01:05.000Z",
+    duration: 60,
+  };
+
+  t.mock.method(Call, "findById", async () => callRecord);
+
+  // Test caller accessing details
+  const reqCaller = { user: { id: "caller-alice" }, params: { callId: "call-details-2" } };
+  const resCaller = createMockRes();
+  await callController.getDetails(reqCaller, resCaller);
+
+  assert.equal(resCaller.statusCode, 200);
+  assert.equal(resCaller.body.success, true);
+  assert.deepEqual(resCaller.body.data, {
+    callId: "call-details-2",
+    callerId: "caller-alice",
+    receiverId: "receiver-bob",
+    roomName: "call-room-details",
+    status: "ended",
+    createdAt: "2026-11-20T10:00:00.000Z",
+    startedAt: "2026-11-20T10:00:05.000Z",
+    endedAt: "2026-11-20T10:01:05.000Z",
+    duration: 60,
+  });
+  assert.equal(resCaller.body.data.livekitSecret, undefined);
+
+  // Test receiver accessing details
+  const reqReceiver = { user: { id: "receiver-bob" }, params: { callId: "call-details-2" } };
+  const resReceiver = createMockRes();
+  await callController.getDetails(reqReceiver, resReceiver);
+
+  assert.equal(resReceiver.statusCode, 200);
+  assert.equal(resReceiver.body.success, true);
+  assert.equal(resReceiver.body.data.callId, "call-details-2");
+});
+
+test("End-to-end Express route GET /api/calls/:callId responds through app pipeline", async (t) => {
+  const callerUser = { id: "caller-get-user", name: "Caller Get" };
+
+  t.mock.method(User, "findById", async (id) => (id === "caller-get-user" ? callerUser : null));
+
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-uuid-get",
+    callerId: "caller-get-user",
+    receiverId: "receiver-get-user",
+    roomName: "call-call-uuid-get",
+    status: "ringing",
+    createdAt: "2026-11-20T12:00:00.000Z",
+    startedAt: null,
+    endedAt: null,
+    duration: null,
+  }));
+
+  const response = await dispatchApp({
+    method: "GET",
+    url: "/api/calls/call-uuid-get",
+    headers: {
+      authorization: "Bearer caller-get-user",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.data.callId, "call-uuid-get");
+  assert.equal(response.body.data.status, "ringing");
+  assert.equal(response.body.data.startedAt, null);
+  assert.equal(response.body.data.duration, null);
+});
+
+// -------------------------------------------------------------
+// Call History API Tests (GET /api/calls/history)
+// -------------------------------------------------------------
+
+test("Call History fails with 401 if request has no authenticated user", async () => {
+  const req = { user: null, query: {} };
+  const res = createMockRes();
+
+  await callController.getHistory(req, res);
+
+  assert.equal(res.statusCode, 401);
+  assert.equal(res.body.success, false);
+});
+
+test("Call History fails with 400 when invalid page or limit is supplied", async () => {
+  for (const invalidPage of ["0", "-1", "abc"]) {
+    const req = { user: { id: "user-123" }, query: { page: invalidPage } };
+    const res = createMockRes();
+    await callController.getHistory(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.message, "page must be a positive integer");
+  }
+
+  for (const invalidLimit of ["0", "-5", "101", "xyz"]) {
+    const req = { user: { id: "user-123" }, query: { limit: invalidLimit } };
+    const res = createMockRes();
+    await callController.getHistory(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.message, "limit must be a positive integer between 1 and 100");
+  }
+});
+
+test("Call History succeeds with default pagination, returns incoming/outgoing directions", async (t) => {
+  const mockUserId = "user-test-hist";
+
+  let findHistoryCalledWith = null;
+  t.mock.method(Call, "findHistory", async (params) => {
+    findHistoryCalledWith = params;
+    return {
+      calls: [
+        {
+          callId: "call-1",
+          callerId: mockUserId,
+          receiverId: "other-user-1",
+          direction: "outgoing",
+          status: "ended",
+          createdAt: "2026-11-20T12:00:00.000Z",
+          startedAt: "2026-11-20T12:00:05.000Z",
+          endedAt: "2026-11-20T12:01:05.000Z",
+          duration: 60,
+        },
+        {
+          callId: "call-2",
+          callerId: "other-user-2",
+          receiverId: mockUserId,
+          direction: "incoming",
+          status: "rejected",
+          createdAt: "2026-11-20T11:00:00.000Z",
+          startedAt: null,
+          endedAt: "2026-11-20T11:00:10.000Z",
+          duration: null,
+        },
+      ],
+      pagination: {
+        page: 1,
+        limit: 20,
+        totalRecords: 2,
+        totalPages: 1,
+      },
+    };
+  });
+
+  const req = { user: { id: mockUserId }, query: {} };
+  const res = createMockRes();
+
+  await callController.getHistory(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.message, "Call history retrieved successfully");
+  assert.deepEqual(findHistoryCalledWith, { userId: mockUserId, page: 1, limit: 20 });
+  assert.equal(res.body.data.length, 2);
+  assert.equal(res.body.data[0].direction, "outgoing");
+  assert.equal(res.body.data[1].direction, "incoming");
+  assert.deepEqual(res.body.pagination, {
+    page: 1,
+    limit: 20,
+    totalRecords: 2,
+    totalPages: 1,
+  });
+});
+
+test("End-to-end Express route GET /api/calls/history responds and is not captured by /:callId", async (t) => {
+  const historyUser = { id: "history-user-uuid", name: "History User" };
+
+  t.mock.method(User, "findById", async (id) => (id === "history-user-uuid" ? historyUser : null));
+
+  t.mock.method(Call, "findHistory", async ({ userId, page, limit }) => ({
+    calls: [],
+    pagination: {
+      page,
+      limit,
+      totalRecords: 0,
+      totalPages: 0,
+    },
+  }));
+
+  const response = await dispatchApp({
+    method: "GET",
+    url: "/api/calls/history?page=2&limit=10",
+    headers: {
+      authorization: "Bearer history-user-uuid",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.message, "Call history retrieved successfully");
+  assert.deepEqual(response.body.pagination, {
+    page: 2,
+    limit: 10,
+    totalRecords: 0,
+    totalPages: 0,
+  });
+});
+
+// -------------------------------------------------------------
+// Cancel Call API Tests (POST /api/calls/cancel)
+// -------------------------------------------------------------
+
+test("Cancel Call fails with 401 if request has no authenticated user", async () => {
+  const req = { user: null, body: { callId: "some-call-id" } };
+  const res = createMockRes();
+
+  await callController.cancel(req, res);
+
+  assert.equal(res.statusCode, 401);
+  assert.equal(res.body.success, false);
+});
+
+test("Cancel Call fails with 400 when callId is missing or empty", async () => {
+  for (const invalidCallId of [undefined, null, "", "   "]) {
+    const req = { user: { id: "caller-uuid" }, body: { callId: invalidCallId } };
+    const res = createMockRes();
+
+    await callController.cancel(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.success, false);
+    assert.equal(res.body.message, "callId is required");
+  }
+});
+
+test("Cancel Call fails with 404 when call does not exist", async (t) => {
+  t.mock.method(Call, "findById", async () => null);
+
+  const req = { user: { id: "caller-uuid" }, body: { callId: "nonexistent-call-id" } };
+  const res = createMockRes();
+
+  await callController.cancel(req, res);
+
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Call not found");
+});
+
+test("Cancel Call fails with 403 when receiver or unrelated user tries to cancel", async (t) => {
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-1",
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    status: "ringing",
+  }));
+
+  // Receiver tries to cancel
+  const reqReceiver = { user: { id: "user-bob" }, body: { callId: "call-1" } };
+  const resReceiver = createMockRes();
+  await callController.cancel(reqReceiver, resReceiver);
+  assert.equal(resReceiver.statusCode, 403);
+  assert.equal(resReceiver.body.message, "Only the caller can cancel this call");
+
+  // Unrelated user tries to cancel
+  const reqEve = { user: { id: "user-eve" }, body: { callId: "call-1" } };
+  const resEve = createMockRes();
+  await callController.cancel(reqEve, resEve);
+  assert.equal(resEve.statusCode, 403);
+  assert.equal(resEve.body.message, "Only the caller can cancel this call");
+});
+
+test("Cancel Call fails with 400 when call is not in ringing status", async (t) => {
+  for (const invalidStatus of ["accepted", "rejected", "cancelled", "ended", "missed"]) {
+    t.mock.method(Call, "findById", async () => ({
+      callId: "call-1",
+      callerId: "user-alice",
+      receiverId: "user-bob",
+      status: invalidStatus,
+    }));
+
+    const req = { user: { id: "user-alice" }, body: { callId: "call-1" } };
+    const res = createMockRes();
+
+    await callController.cancel(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.success, false);
+    assert.match(res.body.message, new RegExp(`already ${invalidStatus}`));
+  }
+});
+
+test("Cancel Call fails with 409 when concurrent cancel occurs", async (t) => {
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-1",
+    callerId: "user-alice",
+    receiverId: "user-bob",
+    status: "ringing",
+  }));
+  t.mock.method(Call, "cancel", async () => null);
+
+  const req = { user: { id: "user-alice" }, body: { callId: "call-1" } };
+  const res = createMockRes();
+
+  await callController.cancel(req, res);
+
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, "Call is no longer available to cancel");
+});
+
+test("Cancel Call succeeds with 200, updates status to cancelled, and records endedAt", async (t) => {
+  const initialCall = {
+    callId: "call-cancel-1",
+    callerId: "caller-alice",
+    receiverId: "receiver-bob",
+    status: "ringing",
+  };
+
+  t.mock.method(Call, "findById", async () => initialCall);
+
+  const endedAtTimestamp = new Date().toISOString();
+  let cancelCalledWith = null;
+  t.mock.method(Call, "cancel", async (params) => {
+    cancelCalledWith = params;
+    return {
+      ...initialCall,
+      status: "cancelled",
+      endedAt: endedAtTimestamp,
+    };
+  });
+
+  const req = { user: { id: "caller-alice" }, body: { callId: "call-cancel-1" } };
+  const res = createMockRes();
+
+  await callController.cancel(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.message, "Call cancelled successfully");
+  assert.equal(res.body.data.callId, "call-cancel-1");
+  assert.equal(res.body.data.status, "cancelled");
+  assert.equal(res.body.data.endedAt, endedAtTimestamp);
+  assert.deepEqual(cancelCalledWith, { id: "call-cancel-1", callerId: "caller-alice" });
+});
+
+test("End-to-end Express route POST /api/calls/cancel responds through app pipeline", async (t) => {
+  const callerUser = { id: "caller-cancel-e2e", name: "Caller Cancel" };
+
+  t.mock.method(User, "findById", async (id) => (id === "caller-cancel-e2e" ? callerUser : null));
+
+  t.mock.method(Call, "findById", async () => ({
+    callId: "call-canc-e2e",
+    callerId: "caller-cancel-e2e",
+    receiverId: "receiver-cancel-e2e",
+    status: "ringing",
+  }));
+
+  const endedAt = new Date().toISOString();
+  t.mock.method(Call, "cancel", async () => ({
+    callId: "call-canc-e2e",
+    callerId: "caller-cancel-e2e",
+    receiverId: "receiver-cancel-e2e",
+    status: "cancelled",
+    endedAt,
+  }));
+
+  const response = await dispatchApp({
+    method: "POST",
+    url: "/api/calls/cancel",
+    headers: {
+      authorization: "Bearer caller-cancel-e2e",
+    },
+    body: {
+      callId: "call-canc-e2e",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.message, "Call cancelled successfully");
+  assert.equal(response.body.data.callId, "call-canc-e2e");
+  assert.equal(response.body.data.status, "cancelled");
+  assert.equal(response.body.data.endedAt, endedAt);
+});

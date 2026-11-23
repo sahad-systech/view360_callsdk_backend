@@ -1,3 +1,11 @@
 node_modules/
 .env
 .local/
+src/credentials
+# Firebase Service Account Credentials & Private Keys
+*firebase*.json
+service-account*.json
+serviceAccountKey*.json
+*.pem
+*.key
+credentials

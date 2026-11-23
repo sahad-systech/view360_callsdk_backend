@@ -46,6 +46,103 @@ function callAccepted({ call, serverUrl, caller, receiver }) {
   };
 }
 
+function callRejected(call) {
+  return {
+    success: true,
+    message: "Call rejected successfully",
+    data: {
+      callId: call.callId,
+      status: call.status,
+      endedAt: call.endedAt,
+    },
+  };
+}
+
+function callEnded(call) {
+  return {
+    success: true,
+    message: "Call ended successfully",
+    data: {
+      callId: call.callId,
+      callerId: call.callerId,
+      receiverId: call.receiverId,
+      roomName: call.roomName,
+      status: call.status,
+      createdAt: call.createdAt,
+      startedAt: call.startedAt,
+      endedAt: call.endedAt,
+      duration: call.duration ?? null,
+    },
+  };
+}
+
+function callDetails(call) {
+  return {
+    success: true,
+    message: "Call details retrieved successfully",
+    data: {
+      callId: call.callId,
+      callerId: call.callerId,
+      receiverId: call.receiverId,
+      roomName: call.roomName,
+      status: call.status,
+      createdAt: call.createdAt,
+      startedAt: call.startedAt,
+      endedAt: call.endedAt,
+      duration: call.duration ?? null,
+    },
+  };
+}
+
+function callHistory({ calls, pagination }) {
+  return {
+    success: true,
+    message: "Call history retrieved successfully",
+    data: calls,
+    pagination: {
+      page: pagination.page,
+      limit: pagination.limit,
+      totalRecords: pagination.totalRecords,
+      totalPages: pagination.totalPages,
+    },
+  };
+}
+
+function callCancelled(call) {
+  return {
+    success: true,
+    message: "Call cancelled successfully",
+    data: {
+      callId: call.callId,
+      status: call.status,
+      endedAt: call.endedAt,
+    },
+  };
+}
+
+function fcmTokenRegistered(tokenRecord) {
+  return {
+    success: true,
+    message: "FCM token registered successfully",
+    data: {
+      id: tokenRecord.id,
+      userId: tokenRecord.userId,
+      fcmToken: tokenRecord.fcmToken,
+      deviceType: tokenRecord.deviceType,
+      deviceId: tokenRecord.deviceId,
+      createdAt: tokenRecord.createdAt,
+      updatedAt: tokenRecord.updatedAt,
+    },
+  };
+}
+
+function fcmTokenRemoved() {
+  return {
+    success: true,
+    message: "FCM token removed successfully",
+  };
+}
+
 function apiError(message) {
   return {
     success: false,
@@ -53,4 +150,18 @@ function apiError(message) {
   };
 }
 
-module.exports = { token, health, error, callInitiated, callAccepted, apiError };
+module.exports = {
+  token,
+  health,
+  error,
+  callInitiated,
+  callAccepted,
+  callRejected,
+  callEnded,
+  callDetails,
+  callHistory,
+  callCancelled,
+  fcmTokenRegistered,
+  fcmTokenRemoved,
+  apiError,
+};
