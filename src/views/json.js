@@ -136,6 +136,14 @@ function fcmTokenRegistered(tokenRecord) {
   };
 }
 
+function fcmTokensList(tokens) {
+  return {
+    success: true,
+    message: "FCM tokens retrieved successfully",
+    data: tokens,
+  };
+}
+
 function fcmTokenRemoved() {
   return {
     success: true,
@@ -162,6 +170,7 @@ module.exports = {
   callHistory,
   callCancelled,
   fcmTokenRegistered,
+  fcmTokensList,
   fcmTokenRemoved,
   apiError,
 };

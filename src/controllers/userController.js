@@ -1,14 +1,27 @@
 const FcmToken = require("../models/fcmToken");
+const User = require("../models/user");
 const view = require("../views/json");
 
 async function registerFcmToken(req, res) {
   try {
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json(view.apiError("Unauthorized"));
+    const { userId: bodyUserId, user_id, fcmToken, deviceType, deviceId } = req.body || {};
+    const candidateUserId = req.user?.id || bodyUserId || user_id;
+
+    // Validate userId
+    if (!candidateUserId || typeof candidateUserId !== "string" || !candidateUserId.trim()) {
+      return res.status(400).json(view.apiError("userId is required"));
     }
 
-    const { fcmToken, deviceType, deviceId } = req.body || {};
+    const trimmedCandidate = candidateUserId.trim();
+    let userId = req.user?.id;
+
+    if (!userId) {
+      const user = await User.findById(trimmedCandidate);
+      if (!user) {
+        return res.status(404).json(view.apiError("User not found"));
+      }
+      userId = user.id;
+    }
 
     // Validate fcmToken
     if (!fcmToken || typeof fcmToken !== "string" || !fcmToken.trim()) {
@@ -50,42 +63,6 @@ async function registerFcmToken(req, res) {
   }
 }
 
-async function removeFcmToken(req, res) {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json(view.apiError("Unauthorized"));
-    }
-
-    const fcmToken = req.body?.fcmToken || req.query?.fcmToken;
-
-    if (!fcmToken || typeof fcmToken !== "string" || !fcmToken.trim()) {
-      return res.status(400).json(view.apiError("fcmToken is required"));
-    }
-
-    const trimmedToken = fcmToken.trim();
-
-    const deleted = await FcmToken.deleteToken({
-      userId,
-      fcmToken: trimmedToken,
-    });
-
-    if (!deleted) {
-      return res.status(404).json(view.apiError("FCM token not found"));
-    }
-
-    return res.status(200).json(view.fcmTokenRemoved());
-  } catch (error) {
-    if (error.code === "ECONNREFUSED") {
-      console.error("Database connection refused.");
-      return res.status(500).json(view.apiError("Database connection refused."));
-    }
-    console.error("FCM token removal failed:", error);
-    return res.status(500).json(view.apiError("Internal server error"));
-  }
-}
-
 module.exports = {
   registerFcmToken,
-  removeFcmToken,
 };

@@ -397,33 +397,8 @@ test("Real PostgreSQL: FCM Tokens & Multi-Device Support", async () => {
   );
   assert.equal(dbCheckAfterUpdate.rows[0].count, 2);
 
-  // 5. User A tries to delete User B's token -> 404
-  const wrongDeleteRes = await dispatchApp({
-    method: "DELETE",
-    url: "/api/users/fcm-token",
-    headers: { authorization: `Bearer ${userAId}` },
-    body: { fcmToken: tokenAndroid },
-  });
-  assert.equal(wrongDeleteRes.statusCode, 404);
-
-  // 6. User B deletes Android token -> 200
-  const deleteRes1 = await dispatchApp({
-    method: "DELETE",
-    url: "/api/users/fcm-token",
-    headers: { authorization: `Bearer ${userBId}` },
-    body: { fcmToken: tokenAndroid },
-  });
-  assert.equal(deleteRes1.statusCode, 200);
-  assert.equal(deleteRes1.body.success, true);
-
-  // 7. User B deletes iOS token -> 200
-  const deleteRes2 = await dispatchApp({
-    method: "DELETE",
-    url: "/api/users/fcm-token",
-    headers: { authorization: `Bearer ${userBId}` },
-    body: { fcmToken: tokenIOS },
-  });
-  assert.equal(deleteRes2.statusCode, 200);
+  // 5. Clean up User B's tokens from database
+  await db.query("DELETE FROM user_fcm_tokens WHERE user_id = $1;", [userBId]);
 
   const dbCheckEmpty = await db.query(
     "SELECT COUNT(*)::int as count FROM user_fcm_tokens WHERE user_id = $1;",
