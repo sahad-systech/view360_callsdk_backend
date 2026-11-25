@@ -41,6 +41,22 @@ function initFirebase() {
       }
     }
 
+    // 2b. Fallback: check local src/credentials folder if path not found
+    const localCredentialsDir = path.resolve(__dirname, "../credentials");
+    if (fs.existsSync(localCredentialsDir)) {
+      const jsonFiles = fs
+        .readdirSync(localCredentialsDir)
+        .filter((f) => f.endsWith(".json"));
+      if (jsonFiles.length > 0) {
+        const fallbackPath = path.join(localCredentialsDir, jsonFiles[0]);
+        const fileContent = fs.readFileSync(fallbackPath, "utf8");
+        const credentials = JSON.parse(fileContent);
+        firebaseApp = initializeApp({ credential: cert(credentials) });
+        console.log(`[Firebase] Initialized with local credential from ${fallbackPath}`);
+        return firebaseApp;
+      }
+    }
+
     // 3. Individual environment variables
     if (
       process.env.FIREBASE_PROJECT_ID &&

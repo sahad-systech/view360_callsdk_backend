@@ -28,6 +28,9 @@ async function optionalAuthenticate(req, res, next) {
   return next();
 }
 
+router.post("/register", userController.registerUser);
+router.post("/", userController.registerUser);
+router.get("/:id", userController.getUser);
 router.post("/fcm-token", optionalAuthenticate, userController.registerFcmToken);
 
 module.exports = router;

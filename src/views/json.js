@@ -120,6 +120,32 @@ function callCancelled(call) {
   };
 }
 
+function userCreated(user) {
+  return {
+    success: true,
+    message: "User registered successfully",
+    data: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      createdAt: user.created_at,
+    },
+  };
+}
+
+function userDetails(user) {
+  return {
+    success: true,
+    message: "User details retrieved successfully",
+    data: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      createdAt: user.created_at,
+    },
+  };
+}
+
 function fcmTokenRegistered(tokenRecord) {
   return {
     success: true,
@@ -169,6 +195,8 @@ module.exports = {
   callDetails,
   callHistory,
   callCancelled,
+  userCreated,
+  userDetails,
   fcmTokenRegistered,
   fcmTokensList,
   fcmTokenRemoved,
